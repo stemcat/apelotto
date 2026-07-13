@@ -1,0 +1,21 @@
+{
+  "name": "megajackpot-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MegaJackpot lottery smart contracts",
+  "scripts": {
+    "build": "hardhat compile",
+    "test": "hardhat test"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.1.0",
+    "@types/chai": "^4.3.16",
+    "@types/mocha": "^10.0.7",
+    "@types/node": "^22.5.0",
+    "chai": "^4.4.1",
+    "hardhat": "^2.26.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  }
+}
