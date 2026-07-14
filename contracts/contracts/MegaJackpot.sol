@@ -11,24 +11,28 @@ import {IVRFCoordinatorV2Plus} from "./interfaces/IVRFCoordinatorV2Plus.sol";
  * @notice A single-draw, proportional-odds ETH lottery targeting a $2.05B jackpot.
  *
  * Rules:
- *  - Anyone may deposit >= 0.01 ETH. 2% of every deposit is a fee: 10% of the fee
- *    is credited to the depositor's referrer's lottery balance, the rest accrues
- *    to the owner (pull-payment).
+ *  - Anyone may deposit >= 0.01 ETH. 100% of the deposit is credited to the
+ *    depositor's balance — no fee is taken up front.
  *  - A depositor's chance of winning is exactly balance / totalPool.
  *  - While the jackpot is below target, anyone may withdraw any part of their
- *    balance 24 hours after their own last deposit (referral credits never
- *    reset the timer).
+ *    balance 24 hours after their own last deposit, and gets it back in full.
+ *    Nobody loses a single wei unless the draw actually happens.
  *  - When the pool's USD value (Chainlink ETH/USD) reaches $2.05B, a 6-hour
  *    lock-in countdown starts and withdrawals stop. Each cumulative 100 ETH of
  *    new deposits within the current window resets the countdown to 6 hours,
  *    capped at 30 days after lock-in began.
  *  - When the countdown expires anyone may trigger the draw. Chainlink VRF
  *    supplies randomness; a Fenwick tree picks the winner in O(log n) with
- *    probability proportional to balance. The winner claims the entire pool.
+ *    probability proportional to balance.
+ *  - Fees exist ONLY at the draw, taken from the final locked pool:
+ *      - 2% of the pool is the house fee; the winner claims the remaining 98%.
+ *      - Referrers earn 10% of the fee their referred players generated:
+ *        0.2% of each referred player's final locked balance, claimable after
+ *        the draw. The owner receives the rest of the fee.
  *
- * Trust model: parameters are immutable, the owner can only collect fees and
- * has no control over user funds, the draw, or the randomness. There is no
- * pause switch and no upgradeability.
+ * Trust model: parameters are immutable, the owner can only collect the fee
+ * after a completed draw, and has no control over user funds, the draw, or
+ * the randomness. There is no pause switch and no upgradeability.
  */
 contract MegaJackpot is ReentrancyGuard, Ownable2Step {
     // ---------------------------------------------------------------- errors
@@ -57,8 +61,9 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
 
     // ------------------------------------------------------------ constants
     uint256 public constant MIN_DEPOSIT = 0.01 ether;
-    uint256 public constant FEE_BPS = 200; // 2% of every deposit
-    uint256 public constant REFERRAL_SHARE_BPS = 1_000; // 10% of the fee
+    uint256 public constant FEE_BPS = 200; // 2% of the final pool, charged only at the draw
+    /// @dev 10% of the 2% fee = 0.2% of each referred player's locked balance.
+    uint256 public constant REFERRAL_FEE_BPS = 20;
     uint256 public constant BPS = 10_000;
     uint256 public constant WITHDRAW_DELAY = 24 hours;
     uint256 public constant JACKPOT_TARGET_USD = 2_050_000_000; // whole dollars
@@ -86,15 +91,17 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
     // ---------------------------------------------------------------- state
     Phase public phase;
 
-    /// @dev Sum of all lottery balances. Always equals the prize while Open/Countdown.
+    /// @dev Sum of all balances. The contract holds exactly this while Open/Countdown.
     uint256 public totalPool;
-    uint256 public pendingOwnerFees;
 
     mapping(address => uint256) public balanceOf;
     mapping(address => uint256) public lastDepositAt;
     mapping(address => address) public referrerOf;
-    mapping(address => uint256) public referralEarned;
     mapping(address => uint256) public referralCount;
+    /// @dev Live sum of balances of everyone `referrer` referred; basis of their draw reward.
+    mapping(address => uint256) public referredBalance;
+    uint256 public totalReferredBalance;
+    mapping(address => bool) public referralRewardClaimed;
 
     address[] private _participants;
     /// @dev 1-based index into _participants; 0 means "never deposited".
@@ -111,28 +118,27 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
     uint256 public pendingRequestId;
     uint256 public drawRequestedAt;
     address public winner;
-    uint256 public prizeAmount;
+    uint256 public prizeAmount; // 98% of the final pool
+    uint256 public pendingOwnerFees; // set at the draw, claimable after
     uint256 public winningRandomWord;
     bool public prizeClaimed;
 
     // --------------------------------------------------------------- events
     event Deposited(
         address indexed account,
-        uint256 grossAmount,
-        uint256 creditedAmount,
-        uint256 fee,
+        uint256 amount,
         address indexed referrer,
         uint256 newBalance,
         uint256 newTotalPool
     );
     event Withdrawn(address indexed account, uint256 amount, uint256 newBalance, uint256 newTotalPool);
-    event ReferralCredited(address indexed referrer, address indexed depositor, uint256 amount);
     event ReferrerSet(address indexed account, address indexed referrer);
     event CountdownStarted(uint256 deadline, uint256 hardDeadline, uint256 totalPool);
     event CountdownExtended(uint256 newDeadline, uint256 windowDepositTotal);
     event DrawRequested(uint256 indexed requestId, uint256 totalPool, uint256 participantCount);
-    event WinnerSelected(address indexed winner, uint256 prize, uint256 randomWord);
+    event WinnerSelected(address indexed winner, uint256 prize, uint256 fee, uint256 randomWord);
     event PrizeClaimed(address indexed winner, uint256 amount);
+    event ReferralRewardClaimed(address indexed referrer, uint256 amount);
     event OwnerFeesWithdrawn(address indexed to, uint256 amount);
 
     // ---------------------------------------------------------- constructor
@@ -153,8 +159,9 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
 
     // --------------------------------------------------------------- deposit
     /**
-     * @notice Enter the lottery (or top up). Pass a referrer to permanently
-     *         bind one on your first deposit; pass address(0) for none.
+     * @notice Enter the lottery (or top up). 100% of the deposit is credited.
+     *         Pass a referrer to permanently bind one on your first deposit;
+     *         pass address(0) for none.
      */
     function deposit(address referrer) external payable nonReentrant {
         if (phase != Phase.Open && phase != Phase.Countdown) revert DepositsClosed();
@@ -175,29 +182,18 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
             emit ReferrerSet(account, referrer);
         }
 
-        uint256 fee = (msg.value * FEE_BPS) / BPS;
-        uint256 credited = msg.value - fee;
-        uint256 referralCut = 0;
+        balanceOf[account] += msg.value;
+        lastDepositAt[account] = block.timestamp;
+        _treeAdd(_participantIndex[account], msg.value);
+        totalPool += msg.value;
 
         address boundReferrer = referrerOf[account];
         if (boundReferrer != address(0)) {
-            referralCut = (fee * REFERRAL_SHARE_BPS) / BPS;
-            if (referralCut > 0) {
-                _registerParticipant(boundReferrer);
-                balanceOf[boundReferrer] += referralCut;
-                referralEarned[boundReferrer] += referralCut;
-                _treeAdd(_participantIndex[boundReferrer], referralCut);
-                emit ReferralCredited(boundReferrer, account, referralCut);
-            }
+            referredBalance[boundReferrer] += msg.value;
+            totalReferredBalance += msg.value;
         }
-        pendingOwnerFees += fee - referralCut;
 
-        balanceOf[account] += credited;
-        lastDepositAt[account] = block.timestamp;
-        _treeAdd(_participantIndex[account], credited);
-        totalPool += credited + referralCut;
-
-        emit Deposited(account, msg.value, credited, fee, boundReferrer, balanceOf[account], totalPool);
+        emit Deposited(account, msg.value, boundReferrer, balanceOf[account], totalPool);
 
         _updateCountdown(msg.value);
     }
@@ -209,8 +205,8 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
 
     // -------------------------------------------------------------- withdraw
     /**
-     * @notice Withdraw any part of your balance. Only while the jackpot is
-     *         Open and >= 24h after your own last deposit.
+     * @notice Withdraw any part of your balance, in full — no fee. Only while
+     *         the jackpot is Open and >= 24h after your own last deposit.
      */
     function withdraw(uint256 amount) external nonReentrant {
         if (phase != Phase.Open) revert WithdrawalsLocked();
@@ -224,6 +220,12 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
         balanceOf[account] -= amount;
         totalPool -= amount;
         _treeSub(_participantIndex[account], amount);
+
+        address boundReferrer = referrerOf[account];
+        if (boundReferrer != address(0)) {
+            referredBalance[boundReferrer] -= amount;
+            totalReferredBalance -= amount;
+        }
 
         emit Withdrawn(account, amount, balanceOf[account], totalPool);
 
@@ -247,7 +249,9 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
         _requestRandomness();
     }
 
-    /// @dev Chainlink VRF v2.5 callback entrypoint.
+    /// @dev Chainlink VRF v2.5 callback entrypoint. This is the only moment
+    ///      fees come into existence: 2% of the locked pool, of which referrer
+    ///      rewards (0.2% of referred balances) are carved out first.
     function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
         if (msg.sender != address(vrfCoordinator)) revert OnlyCoordinator();
         if (requestId != pendingRequestId) revert UnknownRequest();
@@ -258,15 +262,20 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
         uint256 winnerIndex = _treeFind(target);
         address selected = _participants[winnerIndex - 1];
 
+        uint256 fee = (totalPool * FEE_BPS) / BPS;
+        // Always <= fee: totalReferredBalance <= totalPool and 0.2% < 2%.
+        uint256 referralPool = (totalReferredBalance * REFERRAL_FEE_BPS) / BPS;
+
         winner = selected;
-        prizeAmount = totalPool;
+        prizeAmount = totalPool - fee;
+        pendingOwnerFees = fee - referralPool;
         winningRandomWord = word;
         phase = Phase.Complete;
 
-        emit WinnerSelected(selected, prizeAmount, word);
+        emit WinnerSelected(selected, prizeAmount, fee, word);
     }
 
-    /// @notice The winner pulls the entire jackpot.
+    /// @notice The winner pulls the jackpot (98% of the final pool).
     function claimPrize() external nonReentrant {
         if (phase != Phase.Complete) revert WrongPhase();
         if (msg.sender != winner || prizeClaimed) revert NothingToClaim();
@@ -278,8 +287,26 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
         if (!ok) revert TransferFailed();
     }
 
+    /// @notice After the draw, referrers pull 0.2% of their referred players'
+    ///         final locked balances (10% of the fee those players generated).
+    function claimReferralReward() external nonReentrant {
+        if (phase != Phase.Complete) revert WrongPhase();
+        if (referralRewardClaimed[msg.sender]) revert NothingToClaim();
+
+        uint256 reward = (referredBalance[msg.sender] * REFERRAL_FEE_BPS) / BPS;
+        if (reward == 0) revert NothingToClaim();
+        referralRewardClaimed[msg.sender] = true;
+
+        emit ReferralRewardClaimed(msg.sender, reward);
+
+        (bool ok, ) = msg.sender.call{value: reward}("");
+        if (!ok) revert TransferFailed();
+    }
+
     // ------------------------------------------------------------------ fees
+    /// @notice Owner fee exists only after a completed draw.
     function withdrawOwnerFees(address to) external onlyOwner nonReentrant {
+        if (phase != Phase.Complete) revert WrongPhase();
         uint256 amount = pendingOwnerFees;
         if (amount == 0) revert NothingToClaim();
         pendingOwnerFees = 0;
@@ -315,6 +342,12 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
         return (balanceOf[account] * 1_000_000) / totalPool;
     }
 
+    /// @notice Referral reward for `account`: a live projection before the
+    ///         draw, the exact claimable amount after it.
+    function referralRewardOf(address account) public view returns (uint256) {
+        return (referredBalance[account] * REFERRAL_FEE_BPS) / BPS;
+    }
+
     function accountInfo(address account)
         external
         view
@@ -322,14 +355,16 @@ contract MegaJackpot is ReentrancyGuard, Ownable2Step {
             uint256 balance,
             uint256 withdrawUnlockAt,
             address referrer,
-            uint256 earnedFromReferrals,
+            uint256 referredVolume,
+            uint256 referralReward,
             uint256 referredUsers
         )
     {
         balance = balanceOf[account];
         withdrawUnlockAt = lastDepositAt[account] == 0 ? 0 : lastDepositAt[account] + WITHDRAW_DELAY;
         referrer = referrerOf[account];
-        earnedFromReferrals = referralEarned[account];
+        referredVolume = referredBalance[account];
+        referralReward = referralRewardOf(account);
         referredUsers = referralCount[account];
     }
 

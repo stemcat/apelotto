@@ -35,9 +35,9 @@ describe("MegaJackpot", () => {
     const { jackpot, feed, alice, bob, carol } = ctx;
     await jackpot.connect(alice).deposit(ethers.ZeroAddress, { value: parse("100") });
     await jackpot.connect(bob).deposit(ethers.ZeroAddress, { value: parse("200") });
-    await feed.setAnswer(4_000_000n * E8); // $4M per ETH -> pool of 588 ETH ≈ $2.35B
+    await feed.setAnswer(4_000_000n * E8); // $4M per ETH -> pool of 600 ETH ≈ $2.4B
     await jackpot.connect(carol).deposit(ethers.ZeroAddress, { value: parse("300") });
-    // credited balances: alice 98, bob 196, carol 294 (totalPool 588)
+    // balances: alice 100, bob 200, carol 300 (totalPool 600, no fee up front)
     return ctx;
   }
 
@@ -49,15 +49,15 @@ describe("MegaJackpot", () => {
       ).to.be.revertedWithCustomError(jackpot, "BelowMinimumDeposit");
     });
 
-    it("credits 98%, takes a 2% fee, updates the pool", async () => {
+    it("credits 100% of the deposit — no up-front fee", async () => {
       const { jackpot, alice } = await loadFixture(deployFixture);
       await expect(jackpot.connect(alice).deposit(ethers.ZeroAddress, { value: parse("1") }))
         .to.emit(jackpot, "Deposited")
-        .withArgs(alice.address, parse("1"), parse("0.98"), parse("0.02"), ethers.ZeroAddress, parse("0.98"), parse("0.98"));
+        .withArgs(alice.address, parse("1"), ethers.ZeroAddress, parse("1"), parse("1"));
 
-      expect(await jackpot.balanceOf(alice.address)).to.equal(parse("0.98"));
-      expect(await jackpot.totalPool()).to.equal(parse("0.98"));
-      expect(await jackpot.pendingOwnerFees()).to.equal(parse("0.02"));
+      expect(await jackpot.balanceOf(alice.address)).to.equal(parse("1"));
+      expect(await jackpot.totalPool()).to.equal(parse("1"));
+      expect(await jackpot.pendingOwnerFees()).to.equal(0n);
       expect(await jackpot.participantCount()).to.equal(1n);
     });
 
@@ -78,50 +78,50 @@ describe("MegaJackpot", () => {
   });
 
   describe("referrals", () => {
-    it("binds a referrer on first deposit and pays 10% of the fee into their balance", async () => {
+    it("binds a referrer on first deposit and tracks referred volume — no money moves", async () => {
       const { jackpot, alice, referrer } = await loadFixture(deployFixture);
-      const value = parse("10");
-      const fee = parse("0.2"); // 2%
-      const refCut = parse("0.02"); // 10% of the fee
 
-      await expect(jackpot.connect(alice).deposit(referrer.address, { value }))
+      await expect(jackpot.connect(alice).deposit(referrer.address, { value: parse("10") }))
         .to.emit(jackpot, "ReferrerSet")
-        .withArgs(alice.address, referrer.address)
-        .and.to.emit(jackpot, "ReferralCredited")
-        .withArgs(referrer.address, alice.address, refCut);
+        .withArgs(alice.address, referrer.address);
 
-      expect(await jackpot.balanceOf(referrer.address)).to.equal(refCut);
-      expect(await jackpot.referralEarned(referrer.address)).to.equal(refCut);
+      expect(await jackpot.referredBalance(referrer.address)).to.equal(parse("10"));
+      expect(await jackpot.totalReferredBalance()).to.equal(parse("10"));
       expect(await jackpot.referralCount(referrer.address)).to.equal(1n);
-      expect(await jackpot.pendingOwnerFees()).to.equal(fee - refCut);
-      // pool = depositor credit + referral credit
-      expect(await jackpot.totalPool()).to.equal(parse("9.8") + refCut);
+      // projected reward = 0.2% of referred volume, but nothing is paid yet
+      expect(await jackpot.referralRewardOf(referrer.address)).to.equal(parse("0.02"));
+      expect(await jackpot.balanceOf(referrer.address)).to.equal(0n);
+      expect(await jackpot.pendingOwnerFees()).to.equal(0n);
+      // the contract holds exactly the pool
+      expect(await ethers.provider.getBalance(await jackpot.getAddress())).to.equal(
+        await jackpot.totalPool()
+      );
     });
 
-    it("keeps paying the bound referrer on later deposits and ignores rebinding attempts", async () => {
+    it("keeps attributing the bound referrer on later deposits and ignores rebinding attempts", async () => {
       const { jackpot, alice, bob, referrer } = await loadFixture(deployFixture);
       await jackpot.connect(alice).deposit(referrer.address, { value: parse("10") });
       await jackpot.connect(alice).deposit(bob.address, { value: parse("10") });
       expect(await jackpot.referrerOf(alice.address)).to.equal(referrer.address);
-      expect(await jackpot.balanceOf(referrer.address)).to.equal(parse("0.04"));
-      expect(await jackpot.balanceOf(bob.address)).to.equal(0n);
+      expect(await jackpot.referredBalance(referrer.address)).to.equal(parse("20"));
+      expect(await jackpot.referredBalance(bob.address)).to.equal(0n);
     });
 
     it("ignores self-referral", async () => {
       const { jackpot, alice } = await loadFixture(deployFixture);
       await jackpot.connect(alice).deposit(alice.address, { value: parse("10") });
       expect(await jackpot.referrerOf(alice.address)).to.equal(ethers.ZeroAddress);
-      expect(await jackpot.balanceOf(alice.address)).to.equal(parse("9.8"));
+      expect(await jackpot.referredBalance(alice.address)).to.equal(0n);
     });
 
-    it("lets a pure referrer withdraw earnings immediately (credits never lock them)", async () => {
+    it("a referred player's withdrawal shrinks the referrer's projected reward", async () => {
       const { jackpot, alice, referrer } = await loadFixture(deployFixture);
       await jackpot.connect(alice).deposit(referrer.address, { value: parse("10") });
-      // referrer never deposited, so no 24h timer applies to them
-      await expect(jackpot.connect(referrer).withdraw(parse("0.02"))).to.changeEtherBalance(
-        referrer,
-        parse("0.02")
-      );
+      await time.increase(DAY + 1n);
+      await jackpot.connect(alice).withdraw(parse("4"));
+      expect(await jackpot.referredBalance(referrer.address)).to.equal(parse("6"));
+      expect(await jackpot.totalReferredBalance()).to.equal(parse("6"));
+      expect(await jackpot.referralRewardOf(referrer.address)).to.equal(parse("0.012"));
     });
   });
 
@@ -140,7 +140,7 @@ describe("MegaJackpot", () => {
       );
     });
 
-    it("allows partial and full withdrawal after 24h", async () => {
+    it("returns every wei deposited — deposit 1 ETH, withdraw exactly 1 ETH", async () => {
       const { jackpot, alice } = await loadFixture(deployFixture);
       await jackpot.connect(alice).deposit(ethers.ZeroAddress, { value: parse("1") });
       await time.increase(DAY + 1n);
@@ -149,9 +149,12 @@ describe("MegaJackpot", () => {
         alice,
         parse("0.5")
       );
-      expect(await jackpot.totalPool()).to.equal(parse("0.48"));
+      expect(await jackpot.totalPool()).to.equal(parse("0.5"));
 
-      await jackpot.connect(alice).withdraw(parse("0.48"));
+      await expect(jackpot.connect(alice).withdraw(parse("0.5"))).to.changeEtherBalance(
+        alice,
+        parse("0.5")
+      );
       expect(await jackpot.balanceOf(alice.address)).to.equal(0n);
       expect(await jackpot.totalPool()).to.equal(0n);
     });
@@ -293,14 +296,14 @@ describe("MegaJackpot", () => {
       ).to.be.revertedWithCustomError(jackpot, "UnknownRequest");
     });
 
-    // Credited balances: alice 98 | bob 196 | carol 294. Cumulative: 98, 294, 588.
+    // Balances: alice 100 | bob 200 | carol 300. Cumulative: 100, 300, 600.
     const boundaryCases: Array<[string, bigint, "alice" | "bob" | "carol"]> = [
       ["word 0 selects the first depositor", 0n, "alice"],
-      ["word at alice's upper boundary selects bob", parse("98"), "bob"],
-      ["word just below alice's boundary selects alice", parse("98") - 1n, "alice"],
-      ["word at bob's upper boundary selects carol", parse("294"), "carol"],
-      ["word at pool-1 selects the last depositor", parse("588") - 1n, "carol"],
-      ["word equal to the pool wraps around to alice", parse("588"), "alice"],
+      ["word at alice's upper boundary selects bob", parse("100"), "bob"],
+      ["word just below alice's boundary selects alice", parse("100") - 1n, "alice"],
+      ["word at bob's upper boundary selects carol", parse("300"), "carol"],
+      ["word at pool-1 selects the last depositor", parse("600") - 1n, "carol"],
+      ["word equal to the pool wraps around to alice", parse("600"), "alice"],
     ];
 
     for (const [name, word, expected] of boundaryCases) {
@@ -308,6 +311,7 @@ describe("MegaJackpot", () => {
         const ctx = await drawReady();
         await ctx.vrf.fulfill(await ctx.jackpot.getAddress(), 1n, word);
         expect(await ctx.jackpot.winner()).to.equal(ctx[expected].address);
+        // prize = 98% of the 600 ETH pool; the 2% fee exists only now
         expect(await ctx.jackpot.prizeAmount()).to.equal(parse("588"));
         expect(await ctx.jackpot.phase()).to.equal(3n); // Complete
       });
@@ -318,7 +322,7 @@ describe("MegaJackpot", () => {
       await jackpot.connect(alice).deposit(ethers.ZeroAddress, { value: parse("100") });
       await jackpot.connect(bob).deposit(ethers.ZeroAddress, { value: parse("200") });
       await time.increase(DAY + 1n);
-      await jackpot.connect(alice).withdraw(parse("98")); // alice fully out
+      await jackpot.connect(alice).withdraw(parse("100")); // alice fully out
       await feed.setAnswer(10_000_000n * E8);
       await jackpot.connect(carol).deposit(ethers.ZeroAddress, { value: parse("300") });
       await time.increase(6n * HOUR + 1n);
@@ -333,7 +337,7 @@ describe("MegaJackpot", () => {
       expect(await jackpot.winner()).to.equal(bob.address);
     });
 
-    it("lets the winner (and only the winner) claim the full pool exactly once", async () => {
+    it("lets the winner (and only the winner) claim 98% of the pool exactly once", async () => {
       const { jackpot, vrf, alice, bob } = await drawReady();
       await vrf.fulfill(await jackpot.getAddress(), 1n, 0n); // alice wins
 
@@ -365,26 +369,91 @@ describe("MegaJackpot", () => {
     });
   });
 
-  describe("owner fees", () => {
-    it("lets only the owner pull accrued fees", async () => {
-      const { jackpot, owner, alice, bob } = await loadFixture(deployFixture);
+  describe("fees & referral rewards — only exist after the draw", () => {
+    /**
+     * referrer refers bob (200) and carol (300); alice (100) has no referrer.
+     * Pool 600. At the draw: fee 12, referrer reward 1 (0.2% of 500),
+     * owner 11, winner prize 588. 588 + 1 + 11 == 600.
+     */
+    async function referralDrawFixture() {
+      const ctx = await loadFixture(deployFixture);
+      const { jackpot, feed, alice, bob, carol, referrer } = ctx;
       await jackpot.connect(alice).deposit(ethers.ZeroAddress, { value: parse("100") });
+      await jackpot.connect(bob).deposit(referrer.address, { value: parse("200") });
+      await feed.setAnswer(4_000_000n * E8);
+      await jackpot.connect(carol).deposit(referrer.address, { value: parse("300") });
+      await time.increase(6n * HOUR + 1n);
+      await jackpot.triggerDraw();
+      return ctx;
+    }
+
+    it("blocks referral claims and owner fee withdrawal before the draw completes", async () => {
+      const { jackpot, owner, alice, referrer } = await loadFixture(deployFixture);
+      await jackpot.connect(alice).deposit(referrer.address, { value: parse("10") });
+      await expect(jackpot.connect(referrer).claimReferralReward()).to.be.revertedWithCustomError(
+        jackpot,
+        "WrongPhase"
+      );
+      await expect(jackpot.connect(owner).withdrawOwnerFees(owner.address)).to.be.revertedWithCustomError(
+        jackpot,
+        "WrongPhase"
+      );
+    });
+
+    it("splits the final pool exactly: 98% winner, referral rewards, owner remainder", async () => {
+      const ctx = await referralDrawFixture();
+      const { jackpot, vrf, owner, alice, referrer } = ctx;
+      await vrf.fulfill(await jackpot.getAddress(), 1n, 0n); // alice wins
+
+      expect(await jackpot.prizeAmount()).to.equal(parse("588"));
+      expect(await jackpot.referralRewardOf(referrer.address)).to.equal(parse("1"));
+      expect(await jackpot.pendingOwnerFees()).to.equal(parse("11"));
+
+      await expect(jackpot.connect(alice).claimPrize()).to.changeEtherBalance(alice, parse("588"));
+      await expect(jackpot.connect(referrer).claimReferralReward()).to.changeEtherBalance(
+        referrer,
+        parse("1")
+      );
+      await expect(jackpot.connect(owner).withdrawOwnerFees(owner.address)).to.changeEtherBalance(
+        owner,
+        parse("11")
+      );
+      // every wei of the 600 ETH pool is accounted for
+      expect(await ethers.provider.getBalance(await jackpot.getAddress())).to.equal(0n);
+    });
+
+    it("referral rewards are claimable once, and only by accounts that referred someone", async () => {
+      const ctx = await referralDrawFixture();
+      const { jackpot, vrf, alice, referrer } = ctx;
+      await vrf.fulfill(await jackpot.getAddress(), 1n, 0n);
+
+      await jackpot.connect(referrer).claimReferralReward();
+      await expect(jackpot.connect(referrer).claimReferralReward()).to.be.revertedWithCustomError(
+        jackpot,
+        "NothingToClaim"
+      );
+      await expect(jackpot.connect(alice).claimReferralReward()).to.be.revertedWithCustomError(
+        jackpot,
+        "NothingToClaim"
+      );
+    });
+
+    it("only the owner can withdraw the house fee", async () => {
+      const ctx = await referralDrawFixture();
+      const { jackpot, vrf, bob } = ctx;
+      await vrf.fulfill(await jackpot.getAddress(), 1n, 0n);
       await expect(jackpot.connect(bob).withdrawOwnerFees(bob.address)).to.be.revertedWithCustomError(
         jackpot,
         "OwnableUnauthorizedAccount"
       );
-      await expect(jackpot.connect(owner).withdrawOwnerFees(owner.address)).to.changeEtherBalance(
-        owner,
-        parse("2")
-      );
-      expect(await jackpot.pendingOwnerFees()).to.equal(0n);
     });
 
-    it("owner fees never touch the prize pool", async () => {
-      const { jackpot, alice } = await loadFixture(deployFixture);
-      await jackpot.connect(alice).deposit(ethers.ZeroAddress, { value: parse("100") });
-      const contractBalance = await ethers.provider.getBalance(await jackpot.getAddress());
-      expect(contractBalance).to.equal((await jackpot.totalPool()) + (await jackpot.pendingOwnerFees()));
+    it("the contract holds exactly the pool while the game is running", async () => {
+      const { jackpot, alice, referrer } = await loadFixture(deployFixture);
+      await jackpot.connect(alice).deposit(referrer.address, { value: parse("100") });
+      expect(await ethers.provider.getBalance(await jackpot.getAddress())).to.equal(
+        await jackpot.totalPool()
+      );
     });
   });
 

@@ -95,7 +95,7 @@ export default function Home() {
       {modal === "deposit" && <DepositModal jackpot={jackpot} onClose={() => setModal(null)} />}
       {modal === "withdraw" && <WithdrawModal onClose={() => setModal(null)} />}
       {modal === "leaderboard" && <LeaderboardModal deposits={deposits} onClose={() => setModal(null)} />}
-      {modal === "referral" && <ReferralModal onClose={() => setModal(null)} />}
+      {modal === "referral" && <ReferralModal jackpot={jackpot} onClose={() => setModal(null)} />}
     </div>
   );
 }

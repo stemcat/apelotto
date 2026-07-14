@@ -26,7 +26,7 @@ const logs = await client.getContractEvents({
 const refLogs = await client.getContractEvents({
   address,
   abi: megaJackpotAbi,
-  eventName: "ReferralCredited",
+  eventName: "ReferrerSet",
   fromBlock: 0n,
 });
 
@@ -37,14 +37,14 @@ console.log(`pool USD:         $${usd} @ ETH/USD ${Number(price) / 1e8}`);
 console.log(`Deposited events: ${logs.length}`);
 console.log(`Referral events:  ${refLogs.length}`);
 
-// Assertions matching the seed script: 5 + 2.5 + 0.75 ETH deposited, 2% fee,
-// alice referred bob + carol (0.2% of their deposits back to alice).
+// Assertions matching the seed script: 5 + 2.5 + 0.75 ETH deposited in full
+// (no up-front fee), alice bound as referrer for bob + carol.
 const wei = (eth: string) => BigInt(Math.round(Number(eth) * 1e6)) * 10n ** 12n;
-const expected = ((wei("8.25") * 9800n) / 10000n) + ((wei("3.25") * 200n) / 10000n / 10n);
+const expected = wei("8.25");
 
 if (totalPool !== expected) throw new Error(`pool mismatch: ${totalPool} != ${expected}`);
 if (logs.length !== 3) throw new Error("expected 3 Deposited events");
-if (refLogs.length !== 2) throw new Error("expected 2 ReferralCredited events");
+if (refLogs.length !== 2) throw new Error("expected 2 ReferrerSet events");
 if (Number(phase) !== 0) throw new Error("expected phase Open");
 
 console.log("\n✅ frontend ABI matches deployed contract — all reads OK");

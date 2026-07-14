@@ -19,11 +19,11 @@ export async function nativeShareOrCopy(text: string, url: string): Promise<"sha
 
 export const shareTexts = {
   hero: () =>
-    "The world's biggest lottery is live: a $2.05B on-chain jackpot. Deposit ETH, your odds = your share of the pool. Withdraw anytime before lock-in. 🎰",
+    "The world's biggest lottery is live: a $2.05B on-chain jackpot. Deposit ETH, your odds = your share of the pool. Withdraw everything anytime before lock-in — you can't lose. 🎰",
   afterDeposit: (ethAmount: string, chancePct: string) =>
-    `I just put ${ethAmount} ETH into the $2.05B MegaJackpot 🎰 My win chance: ${chancePct}. Odds are exactly proportional — no house tricks, all on-chain.`,
+    `I just put ${ethAmount} ETH into the $2.05B MegaJackpot 🎰 My win chance: ${chancePct}. 100% refundable until lock-in — no fees unless the draw happens.`,
   referral: () =>
-    "Join me in the $2.05B MegaJackpot — the biggest lottery ever, fully on-chain. Deposit ETH, withdraw anytime before lock-in. 🎰",
+    "Join me in the $2.05B MegaJackpot — the biggest lottery ever, fully on-chain. Deposit ETH, withdraw everything anytime before lock-in. 🎰",
   countdown: (remaining: string) =>
     `⏳ ${remaining} left! The $2.05B MegaJackpot is locked in and counting down. One wallet takes it all.`,
 };

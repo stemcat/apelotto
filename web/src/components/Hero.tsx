@@ -93,8 +93,10 @@ export function Hero({
             <ShareButtons text={shareTexts.hero()} url={shareUrl} />
           </div>
           <p className="max-w-lg text-sm text-zinc-400">
-            Your win chance = your exact share of the pool. Withdraw your balance anytime
-            (24h after your last deposit) until the ${"2.05B"} target locks in the draw.
+            Your win chance = your exact share of the pool. Withdraw your{" "}
+            <span className="text-zinc-200">full balance</span> anytime (24h after your last
+            deposit) — fees only exist if the draw happens. Until the ${"2.05B"} lock-in, you
+            can&apos;t lose a cent.
           </p>
         </>
       )}

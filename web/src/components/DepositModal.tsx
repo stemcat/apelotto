@@ -37,13 +37,12 @@ export function DepositModal({
     }
   }, [amount]);
 
-  const fee = (parsed * 200n) / 10_000n;
-  const credited = parsed - fee;
-  const refCut = referrer ? (fee * 1_000n) / 10_000n : 0n;
+  // 100% is credited — the 2% fee only exists if the draw actually happens
+  const feeAtDraw = (parsed * 200n) / 10_000n;
 
   // projected win chance after this deposit
-  const newBalance = position.balance + credited;
-  const newPool = jackpot.totalPool + credited + refCut;
+  const newBalance = position.balance + parsed;
+  const newPool = jackpot.totalPool + parsed;
   const projectedPpm = newPool > 0n ? (newBalance * 1_000_000n) / newPool : 0n;
 
   const tooSmall = parsed > 0n && Number(amount) < MIN_DEPOSIT_ETH;
@@ -54,16 +53,16 @@ export function DepositModal({
         <div className="flex flex-col items-center gap-4 text-center">
           <p className="text-5xl">🎰</p>
           <p className="text-zinc-300">
-            <span className="font-bold text-white">{formatEth(credited)} ETH</span> is now in the
+            <span className="font-bold text-white">{formatEth(parsed)} ETH</span> is now in the
             jackpot. Your win chance:{" "}
             <span className="font-bold text-amber-300">{winChanceLabel(projectedPpm)}</span>
           </p>
           <p className="text-sm text-zinc-400">
-            Boost your odds for free: share your link — you earn 10% of the house fee from
-            everyone you refer, credited straight to your jackpot balance.
+            Share your link — everyone you refer earns you 10% of the house fee they generate,
+            paid out when the draw happens.
           </p>
           <ShareButtons
-            text={shareTexts.afterDeposit(formatEth(credited), winChanceLabel(projectedPpm))}
+            text={shareTexts.afterDeposit(formatEth(parsed), winChanceLabel(projectedPpm))}
             url={address ? referralLink(address) : window.location.origin}
           />
           <button onClick={onClose} className="text-sm text-zinc-500 underline hover:text-zinc-300">
@@ -107,10 +106,10 @@ export function DepositModal({
         </div>
 
         <div className="rounded-xl border border-white/5 bg-white/[0.03] p-3 text-sm">
-          <Row label="Goes into your jackpot balance (98%)" value={`${formatEth(credited)} ETH`} />
-          <Row label="House fee (2%)" value={`${formatEth(fee)} ETH`} muted />
+          <Row label="Goes into your jackpot balance" value={`${formatEth(parsed)} ETH (100%)`} />
+          <Row label="House fee — only if the draw happens" value={`${formatEth(feeAtDraw)} ETH (2%)`} muted />
           {referrer && (
-            <Row label={`Referrer ${shortAddress(referrer)} earns`} value={`${formatEth(refCut)} ETH`} muted />
+            <Row label={`Referrer ${shortAddress(referrer)} gets 10% of that fee`} value="at the draw" muted />
           )}
           <div className="my-2 border-t border-white/5" />
           <Row label="Your projected win chance" value={winChanceLabel(projectedPpm)} accent />
@@ -145,7 +144,8 @@ export function DepositModal({
                 : `Deposit ${amount || "0"} ETH`}
         </button>
         <p className="text-center text-xs text-zinc-500">
-          Withdraw anytime, 24h after your last deposit — until the $2.05B lock-in.
+          Withdraw your full balance anytime, 24h after your last deposit — you can never lose
+          money before the $2.05B lock-in.
         </p>
       </div>
     </Modal>

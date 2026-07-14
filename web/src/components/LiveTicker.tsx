@@ -36,7 +36,7 @@ export function LiveTicker({ deposits }: { deposits: ReturnType<typeof useDeposi
             <AddressLabel address={entry.account} />
             <div className="flex items-center gap-3">
               <span className="font-mono font-semibold text-emerald-300">
-                +{formatEth(entry.grossAmount)} ETH
+                +{formatEth(entry.amount)} ETH
               </span>
               <span className="w-16 text-right text-xs text-zinc-500">{timeAgo(deposits.ageOf(entry))}</span>
             </div>

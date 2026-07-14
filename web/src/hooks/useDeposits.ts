@@ -14,7 +14,7 @@ import {
 export type DepositEntry = {
   id: string;
   account: `0x${string}`;
-  grossAmount: bigint;
+  amount: bigint;
   blockNumber: bigint;
 };
 
@@ -46,7 +46,7 @@ export function useDeposits() {
           logs.map((log) => ({
             id: `${log.transactionHash}-${log.logIndex}`,
             account: log.args.account!,
-            grossAmount: log.args.grossAmount!,
+            amount: log.args.amount!,
             blockNumber: log.blockNumber,
           }))
         );
@@ -74,7 +74,7 @@ export function useDeposits() {
           .map((log) => ({
             id: `${log.transactionHash}-${log.logIndex}`,
             account: log.args.account!,
-            grossAmount: log.args.grossAmount!,
+            amount: log.args.amount!,
             blockNumber: log.blockNumber!,
           }))
           .filter((d) => !seen.has(d.id));
@@ -97,7 +97,7 @@ export function useDeposits() {
   }, [deposits, currentBlock]);
 
   const total24h = useMemo(
-    () => last24h.reduce((sum, d) => sum + d.grossAmount, 0n),
+    () => last24h.reduce((sum, d) => sum + d.amount, 0n),
     [last24h]
   );
 
@@ -113,7 +113,7 @@ export function aggregateLeaderboard(
   for (const d of deposits) {
     if (d.blockNumber < cutoff) continue;
     const entry = byAccount.get(d.account) ?? { total: 0n, count: 0 };
-    entry.total += d.grossAmount;
+    entry.total += d.amount;
     entry.count += 1;
     byAccount.set(d.account, entry);
   }

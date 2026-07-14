@@ -2,13 +2,18 @@
 
 One pool. One draw. One wallet wins **$2,050,000,000**.
 
-- Deposit **≥ 0.01 ETH**; your win chance is **exactly** your share of the pool.
-- Withdraw any amount, anytime, **24h after your last deposit** — until lock-in.
-- **2% fee** on deposits: 1.8% to the house, **0.2% to your referrer's jackpot balance**.
+- Deposit **≥ 0.01 ETH**; 100% is credited and your win chance is **exactly** your share
+  of the pool.
+- Withdraw any amount **in full**, anytime, **24h after your last deposit** — until
+  lock-in. **You cannot lose money unless the draw actually happens**: no fee is taken
+  up front.
 - When the pool hits **$2.05B** (Chainlink ETH/USD), a **6-hour countdown** locks all
   balances. Every cumulative **100 ETH** deposited resets it to 6h, capped at **30 days**.
 - When it expires, **Chainlink VRF** draws the winner — provably fair, odds proportional
-  to balances via an O(log n) Fenwick tree. Winner claims the entire pool.
+  to balances via an O(log n) Fenwick tree.
+- Fees exist **only at the draw**, from the final locked pool: winner claims **98%**;
+  referrers claim **10% of the fee their referred players generated** (0.2% of each
+  referred player's locked balance); the owner gets the rest of the 2%.
 
 ```
 ├── contracts/   Hardhat + Solidity 0.8.24 — MegaJackpot.sol, mocks, 35 tests
@@ -21,7 +26,8 @@ The entire trust story is in `contracts/contracts/MegaJackpot.sol` (~450 lines, 
 
 | Property | How |
 | --- | --- |
-| No rug possible | Owner can only withdraw the accrued 1.8% fee. Zero admin functions touch player funds, phases, or parameters. |
+| You can't lose before the draw | No up-front fee: deposit 1 ETH, withdraw exactly 1 ETH. Fees are carved out of the final pool only after a completed draw. If the jackpot never fills, everyone walks away whole. |
+| No rug possible | The owner's fee only comes into existence after a completed draw. Zero admin functions touch player funds, phases, or parameters. |
 | No upgrades, no pause | Contract is immutable. All parameters are `constant`/`immutable`. |
 | Fair randomness | Chainlink VRF v2.5. Nobody — not even the owner — can predict or grind the outcome. A public `retryDraw()` re-requests randomness if VRF ever stalls 24h. |
 | Exact proportional odds | Winner selection walks a Fenwick tree of balances: P(win) = balance / totalPool, verified in tests at exact boundaries. |
@@ -91,10 +97,14 @@ Single page, everything else in modals:
 
 ## Design decisions & interpretations
 
+- **Fees settle at the draw, not at deposit.** Referral rewards are 0.2% of each referred
+  player's **final locked balance** (tracked incrementally as `referredBalance`, O(1) per
+  deposit/withdrawal — nothing is iterated at draw time). If a referred player withdraws,
+  the referrer's projected reward shrinks accordingly. Rewards are pull-claimed after the
+  draw via `claimReferralReward()`.
 - "More than 100 ETH within the 6h window" is implemented as **cumulative** deposits in
   the current window (each reset starts a fresh window).
 - A deposit after the deadline expires joins the pool but **cannot revive** the countdown.
-- Referral credits **don't reset** the referrer's 24h withdrawal timer (only own deposits do).
 - Once the countdown starts it never un-starts, even if ETH's price falls — deterministic
   lock-in beats an oscillating threshold.
 - The $2.05B check uses the Chainlink feed with a 24h staleness guard.

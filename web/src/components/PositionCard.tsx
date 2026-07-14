@@ -33,7 +33,7 @@ export function PositionCard({
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat label="Your balance" value={`${formatEth(position.balance)} ETH`} />
         <Stat label="Win chance" value={winChanceLabel(position.winChancePpm)} accent />
-        <Stat label="Referral earnings" value={`${formatEth(position.earnedFromReferrals)} ETH`} />
+        <Stat label="Referral reward (at draw)" value={`${formatEth(position.referralReward)} ETH`} />
         <Stat
           label="Withdrawals"
           value={locked ? "🔒 Locked in" : secondsUntilUnlock > 0 ? `in ${formatDuration(secondsUntilUnlock)}` : "Unlocked"}

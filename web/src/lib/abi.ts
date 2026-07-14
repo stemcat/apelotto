@@ -14,6 +14,7 @@ export const megaJackpotAbi = [
     outputs: [],
   },
   { type: "function", name: "claimPrize", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  { type: "function", name: "claimReferralReward", stateMutability: "nonpayable", inputs: [], outputs: [] },
   { type: "function", name: "triggerDraw", stateMutability: "nonpayable", inputs: [], outputs: [] },
   { type: "function", name: "retryDraw", stateMutability: "nonpayable", inputs: [], outputs: [] },
   {
@@ -72,9 +73,17 @@ export const megaJackpotAbi = [
       { name: "balance", type: "uint256" },
       { name: "withdrawUnlockAt", type: "uint256" },
       { name: "referrer", type: "address" },
-      { name: "earnedFromReferrals", type: "uint256" },
+      { name: "referredVolume", type: "uint256" },
+      { name: "referralReward", type: "uint256" },
       { name: "referredUsers", type: "uint256" },
     ],
+  },
+  {
+    type: "function",
+    name: "referralRewardClaimed",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ type: "bool" }],
   },
   {
     type: "function",
@@ -91,9 +100,7 @@ export const megaJackpotAbi = [
     name: "Deposited",
     inputs: [
       { name: "account", type: "address", indexed: true },
-      { name: "grossAmount", type: "uint256", indexed: false },
-      { name: "creditedAmount", type: "uint256", indexed: false },
-      { name: "fee", type: "uint256", indexed: false },
+      { name: "amount", type: "uint256", indexed: false },
       { name: "referrer", type: "address", indexed: true },
       { name: "newBalance", type: "uint256", indexed: false },
       { name: "newTotalPool", type: "uint256", indexed: false },
@@ -111,10 +118,17 @@ export const megaJackpotAbi = [
   },
   {
     type: "event",
-    name: "ReferralCredited",
+    name: "ReferrerSet",
+    inputs: [
+      { name: "account", type: "address", indexed: true },
+      { name: "referrer", type: "address", indexed: true },
+    ],
+  },
+  {
+    type: "event",
+    name: "ReferralRewardClaimed",
     inputs: [
       { name: "referrer", type: "address", indexed: true },
-      { name: "depositor", type: "address", indexed: true },
       { name: "amount", type: "uint256", indexed: false },
     ],
   },
@@ -141,6 +155,7 @@ export const megaJackpotAbi = [
     inputs: [
       { name: "winner", type: "address", indexed: true },
       { name: "prize", type: "uint256", indexed: false },
+      { name: "fee", type: "uint256", indexed: false },
       { name: "randomWord", type: "uint256", indexed: false },
     ],
   },

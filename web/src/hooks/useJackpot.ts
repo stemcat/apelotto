@@ -101,11 +101,19 @@ export function useMyPosition() {
     query: { enabled: isContractConfigured && !!address, refetchInterval: 5_000 },
   });
 
-  const [balance, withdrawUnlockAt, referrer, earnedFromReferrals, referredUsers] =
-    (info as readonly [bigint, bigint, `0x${string}`, bigint, bigint] | undefined) ?? [
+  const { data: rewardClaimed } = useReadContract({
+    ...contract,
+    functionName: "referralRewardClaimed",
+    args: [address ?? "0x0000000000000000000000000000000000000000"],
+    query: { enabled: isContractConfigured && !!address, refetchInterval: 10_000 },
+  });
+
+  const [balance, withdrawUnlockAt, referrer, referredVolume, referralReward, referredUsers] =
+    (info as readonly [bigint, bigint, `0x${string}`, bigint, bigint, bigint] | undefined) ?? [
       0n,
       0n,
       "0x0000000000000000000000000000000000000000",
+      0n,
       0n,
       0n,
     ];
@@ -115,7 +123,10 @@ export function useMyPosition() {
     balance,
     withdrawUnlockAt: Number(withdrawUnlockAt),
     referrer,
-    earnedFromReferrals,
+    referredVolume,
+    /** projection before the draw; exact claimable amount after it */
+    referralReward,
+    referralRewardClaimed: (rewardClaimed as boolean | undefined) ?? false,
     referredUsers,
     winChancePpm: (chancePpm as bigint | undefined) ?? 0n,
     refetch: refetchInfo,
